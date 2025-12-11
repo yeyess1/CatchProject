@@ -1,0 +1,387 @@
+---
+title: "Proyecto Catch"
+author: "Yeiver Sanabria"
+date: "2025-10-29"
+output: pdf_document
+fontsize: 12pt
+mainfont: "Times New Roman"
+geometry: margin=2.5cm
+linestretch: 1.15
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# 1. Introduccion
+
+El presente proyecto tiene como objetivo analizar y pronosticar la empleabilidad en la industria manufacturera mexicana (Sector 31-33), utilizando datos históricos del Instituto Nacional de Estadística y Geografía (INEGI). Mediante un enfoque de análisis de series de tiempo, se busca comprender el comportamiento, las tendencias y los componentes estacionales del empleo en el sector, con el fin de anticipar periodos de alta contratación y ofrecer a las compañías de reclutamiento de talento humano una herramienta estratégica para planificar recursos y fortalecer su posicionamiento competitivo.
+
+La industria manufacturera representa uno de los pilares económicos del país, aportando aproximadamente el 20 % del Producto Interno Bruto (PIB) nacional (Banco Mundial, 2024). En 2023, este sector alcanzó un valor de producción cercano a 5.2 billones de pesos mexicanos, consolidándose como uno de los rubros de mayor crecimiento y relevancia en la economía nacional (Instituto Nacional de Estadística y Geografía [INEGI], 2024). Este dinamismo hace del sector un terreno clave para la planificación de talento, ya que la capacidad de anticipar los ciclos de contratación puede traducirse en ventajas operativas y comerciales significativas.
+
+De acuerdo con estimaciones del mercado, el costo promedio de reclutamiento en México oscila entre el 15 % y el 25 % del salario anual del candidato colocado, pudiendo alcanzar hasta el 30 % en perfiles especializados (Agencia de Reclutamiento, 2025; Del Moral, 2025). En este contexto, una firma especializada que logre posicionarse como socio estratégico del sector manufacturero podría generar ingresos superiores a 30 millones de pesos anuales, considerando un volumen estimado de 500 colocaciones con un salario promedio de 300 000 MXN por empleado. Para sustentar esta visión, se aplicaron tres modelos de pronóstico —Holt-Winters, ARIMA y Bayesian Structural Time Series (BSTS)—, logrando estimar la empleabilidad del sector hasta el año 2026, y consolidando una propuesta que combina análisis científico con valor comercial tangible.
+
+
+
+# 2.Metodologia
+
+## 2.1 Recoleccion de informacion
+
+El insumo inicial para este proyecto, fueron datos tabulares recopilados directamente del INEGI, desde su pagina oficial, atraves de los servicios para desarrolladores, desde los cuales se exporto en formato json, una serie temporal con indicadores asociados a la empleabilidad por año en esta industria, para mas informacion, consulte el siguiente enalce:
+https://www.inegi.org.mx/servicios/api_indicadores.html#idMetodoIndicadoresInegi.
+
+
+![API INEGI](/home/yeiver/Documentos/universidad/proyectoCatch/apiBanco.png){width=70%}
+
+
+**Ejecutando el siguiente curl tambien se pueden obtener los datos mencionados:**
+
+curl -sS 'https://www.inegi.org.mx/app/api/indicadores/desarrolladores/jsonxml/INDICATOR/702139/es/00/false/BISE/2.0/7354251f-cd53-e0e6-22f2-6f859ac860c2?type=json' \
+  -H 'Accept: application/json'
+  
+## 2.2 Transformacion
+
+Con la información antes mencionada, se realizó una transformación de los datos. Inicialmente, con un formateador gratuito de JSON, se adaptó el formato de los datos y se construyó una tabla en formato CSV. Luego, tomando el total de personas empleadas para el año 2018, se transformó la data, la cual viene con unidad de medida: UNIT=1051, que según el diccionario de datos del INEGI corresponde a índice base 2018. Por lo tanto, para tener toda la serie temporal en personas empleadas fue necesario hacer el siguiente cálculo:
+
+*personas_mes = 6,493,020 × (índice_mes / 100)*
+
+Adicionalmente, se removieron las columnas que no eran de interés, dejando un archivo en formato CSV con una columna asociada a la fecha de recolección y una columna de personas, con el total de personas empleadas en la industria manufacturera, con información desde 2007 hasta 2025.
+
+
+## 2.3 Analisis temporal
+
+Para el análisis de la información recolectada, se utilizó RStudio. Inicialmente, se cargó el archivo CSV construido en las secciones 2.1 y 2.2.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+ 
+library(dplyr)
+library(readxl)
+library(dplyr)
+library(lubridate)
+library(forecast)
+library(bsts)
+
+```
+
+
+```{r}
+data <- read.csv('/home/yeiver/Documentos/universidad/proyectoCatch/personas_mensuales_desde_indice_base2018.csv')
+attach(data)
+```
+
+Luego, se realizo la transformacion necesaria a la columna fecha, para que fuera identificada como tipo Date
+
+
+```{r}
+data <- data %>%
+  mutate(`fecha` = ym(`fecha`)) 
+```
+
+Con el dataframe con los formatos adecuados, instanciamos la serie de tiempo.
+
+```{r}
+manufactura_ts <- ts(data$personas, start = c(2007, 1), freq = 12)
+```
+
+
+```{r, echo=FALSE}
+yticks <- pretty(range(manufactura_ts), n = 8)
+plot(manufactura_ts,
+     axes = FALSE,                      # ocultar ejes por defecto
+     main = "Cantidad de personas empleadas en la Industria Manufacturera\nen México (2007–2025)",
+     xlab = "",
+     ylab = "Personas (millones)"
+)
+
+axis(1)
+axis(2, at = yticks,
+     labels = format(yticks / 1000000, big.mark = ","),
+     las = 1)
+
+abline(h = yticks, col = "gray90", lty = 3)
+box()
+
+mtext("Fuente: INEGI – Banco de Indicadores (BISE).", side = 1, line = 3, adj = 0, cex = 0.8)
+```
+
+Como se puede observar, la serie presenta una tendencia creciente, aunque no constante. Esto refleja el claro crecimiento de la industria en el país y coincide con los datos que reporta el INEGI.
+
+
+
+```{r, echo=FALSE}
+
+plot(decompose(manufactura_ts))
+```
+
+Un análisis más detallado de la serie de tiempo expone factores de gran relevancia. Como se mencionó anteriormente, parece haber una clara tendencia creciente en los últimos años, pero dicha tendencia presenta comportamientos depresivos en los últimos periodos. Adicionalmente, se puede concluir que hay un claro factor estacional o cíclico, lo que indica que la cantidad de personas empleadas en esta industria tiene una frecuencia definida. Esto puede indicar en qué meses aumenta la demanda de personal, información de gran utilidad que permite cuantificar lo que intuitivamente se conoce: que hay meses de mayor contratación. Teniendo en cuenta esta información, se pueden tomar decisiones estratégicas y ofrecer el personal adecuado en el momento oportuno para fortalecer el trabajo en la industria manufacturera.
+
+
+
+
+```{r}
+diff_12 <- diff(manufactura_ts, lag = 12)
+
+ac <- acf(diff_12, lag.max = 60, plot = FALSE)
+```
+
+```{r, echo=FALSE}
+
+plot(ac, 
+     xaxt = "n",
+     main = "Diferencia interanual del empleo manufacturero\n en Mexico",
+     ylab = "Valor",  # Es buena práctica ponerle título al eje Y
+     xlab = "Rezagos (Lags)" # Puse un título de ejemplo para el eje X
+)
+
+axis(1,
+     at = seq(0, 60, by = 6) / frequency(manufactura_ts), 
+     labels = seq(0, 60, by = 6)
+)
+
+```
+
+
+En la gráfica de correlaciones con lag 12 se puede identificar la influencia que tienen los periodos anteriores sobre los actuales. Esto otorga información relevante, ya que se puede afirmar con un 95 % de confianza que los resultados estadísticos de las correlaciones del año anterior tienen una influencia notoria sobre el periodo actual. Por lo tanto, conocer la empleabilidad en el año en curso nos muestra cómo se comportará el sector en el periodo siguiente. Se aproximará la serie temporal utilizando el modelo de Holt-Winters para determinar los valores estacionales —es decir, la influencia que tiene cada mes sobre la contratación— y hacer un pronóstico del año siguiente. En consecuencia, se podrá determinar cuál será la demanda de personal en esta industria por cada mes del año 2026. Esta información nos brinda una visión de cómo se comporta el sector, permitiéndonos estar un paso adelante de competidores que también buscan este talento humano, incluso dentro del mismo sector, capacitando al personal y advirtiendo a las compañías sobre posibles fugas del recurso humano en los meses de influencia negativa.
+
+
+## 3. Implementación de modelos
+
+Para realizar una comparación adecuada entre modelos, la serie se dividió en dos: entrenamiento y prueba.
+
+
+```{r}
+train <- window(manufactura_ts, end = c(2024, 12))
+test  <- window(manufactura_ts, start = c(2025, 1), end = c(2025, 8))
+```
+
+Utilizando el año 2025, como periodo de prueba, para poder medir y comparar los modelos propuestos acontinuacion.
+
+
+
+## 3.1 Modelo de Holt-Winters
+El modelo de Holt-Winters es un método de suavizamiento exponencial usado para pronosticar series de tiempo que muestran tendencia y estacionalidad. Combina tres componentes: nivel, tendencia y estacionalidad, ajustándolos de forma dinámica para hacer predicciones más precisas a corto plazo (Winters, 1960).
+
+```{r}
+train_hw <- HoltWinters (train, seasonal = "mult") 
+train_hw$coef ; train_hw$SS
+
+```
+
+
+En la tabla de pronóstico se observó cómo cada valor s_i corresponde al coeficiente estacional, que explica cómo cada mes altera el promedio de empleados en el sector manufacturero. Se concluye, con la información recolectada, que la tendencia creciente de la cantidad de empleados efectivamente se está reduciendo, según el parámetro b, que representa la tendencia en el último periodo observado.
+
+
+```{r, echo=FALSE}
+h <- length(test)
+fc_hw <- predict(train_hw, n.ahead = h)
+
+
+mse_hw <- mean((as.numeric(test) - as.numeric(fc_hw))^2, na.rm = TRUE)
+print(mse_hw)
+
+plot(train_hw, ylab = "Personas empleadas")
+lines(fc_hw, col = "blue", lwd = 2, lty = 2) 
+legend("topleft",
+       legend = c("Observado/Ajuste", "Pronóstico 1 año"),
+       lty = c(1,2), col = c("black","blue"), bty = "n")
+```
+
+```{r}
+print(fc_hw)
+```
+
+Como se puede observar en la grafica roja, el modelo se ajusta muy bien a los datos observados, reconoce tanto la tendencia creciente, como el factor estacional de la misma y se ajusta adecuadamente; el MSE nos da un valor razonable, en el contexto de trabajo, por lo que podemos afirmar que el modelo es funcional. Respecto al pronostico se analizan los valores mensuales generados por el modelo, y una vez graficados en la serie original parecen fluir con normalidad sobre el patron observado, por lo que se pueden utilizar como fuente aceptable de pronostico.
+
+
+## 3.1 Modelo ARIMA 
+
+
+Una metodología más convencional para abordar problemas de series de tiempo es el modelo ARIMA. El modelo ARIMA (AutoRegressive Integrated Moving Average) es un método estadístico usado para pronosticar series de tiempo al combinar tres componentes: autorregresión (AR), diferenciación (I) y media móvil (MA), permitiendo capturar patrones de dependencia y tendencia en los datos (Box & Jenkins, 1970).
+
+
+```{r}
+fit_arima <- auto.arima(train, seasonal = TRUE, stepwise = FALSE, approximation = FALSE)
+summary(fit_arima)
+```
+
+```{r}
+
+fc_arima  <- forecast(fit_arima, h = h)
+plot(fc_arima, main="Pronostico empleabilidad sector manufacturero Mexico 2025 ARIMA")
+
+mse_arima <- mean((as.numeric(test) - as.numeric(fc_arima$mean))^2, na.rm = TRUE)
+print(mse_arima)
+
+```
+
+
+El análisis de los coeficientes del modelo ARIMA indica que la dinámica del número de personas empleadas en la industria se caracteriza por una fuerte dependencia de su propio historial. La significancia estadística y el valor del coeficiente AR(1) revelan una inercia considerable, congruente con una tendencia de crecimiento o declive sostenido. Además, el modelo ha identificado y cuantificado una clara estructura estacional de 12 meses mediante los coeficientes SAR(1) y SAR(2), confirmando que el nivel de empleo presenta patrones que se repiten en ciclos anuales. Finalmente, el proceso de integración del modelo señala que la serie posee una tendencia no estacionaria que fue exitosamente capturada y removida, demostrando que el modelo está bien especificado.
+
+
+
+## 3.2 ARIMA BAYESIANO BSTS
+
+El modelo Bayesian Structural Time Series (BSTS) es una técnica de pronóstico que descompone la serie de tiempo en componentes estructurales fundamentales, a diferencia de los métodos tradicionales que se centran únicamente en la correlación. El BSTS modela explícitamente la tendencia (cómo evoluciona el nivel de la serie), la estacionalidad (patrones que se repiten en el tiempo) y el impacto de covariables externas de manera dinámica. Utilizando un enfoque bayesiano, el modelo no solo proporciona una predicción puntual, sino también un intervalo de credibilidad que cuantifica la incertidumbre. Esto lo convierte en una herramienta flexible y poderosa, especialmente valiosa para inferencia causal y pronósticos robustos en entornos complejos (Scott & Varian, 2014).
+
+La implementación de BSTS busca, mediante el enfoque bayesiano, obtener un modelo con pronósticos más adecuados, modelando la tendencia y la estacionalidad y capturando mejor los cambios bruscos en la serie mediante priors adecuadas.
+
+En este caso el BSTS, recibe como parametros la estructura del modelo, y en cada componente recibe una prior, para este caso debido a la complejidad de la serie de tiempo se definiran los priors en defaul, es decir se dejaran libres para que sean ajustados por el modelo, ademas, se incluira el componente de tendencia local AddLocalLinearTrend, significa que el nivel y la pendiente se ajustan en cada paso de tiempo, permitiendo que la tendencia se acelere, desacelere o se frene, adaptándose a crisis o booms económicos; se incluira tambien el componente estacional, debido a que tanto ARIMA, como el analisis inicial de la serie original muestran un fuerte factor periodico.
+
+
+```{r}
+y <- train
+
+ss <- list()
+ss <- AddLocalLinearTrend(ss, y) 
+ss <- AddSeasonal(ss, y, nseasons = 12) 
+
+set.seed(123)
+fit_bayesian <- bsts(y, state.specification = ss, niter = 10000, ping = 0)
+summary(fit_bayesian)
+```
+
+```{r}
+fc_bayesian <- predict(fit_bayesian, horizon = h, burn = 1000)
+mse_bayesian <- mean((as.numeric(test) - as.numeric(fc_bayesian$mean))^2, na.rm = TRUE)
+
+print(mse_bayesian)
+
+plot(fc_bayesian, main="Pronostico empleabilidad sector manufacturero Mexico 2025 BSTS")
+```
+
+### Resultados
+
+Dado que la magnitud de la variable de interes esta dada en millones, los MSE de los modelos son, razonablemente, grandes por lo que se usara una funcion para determinar de manera mas sencilla el mse mas bajo.
+
+
+```{r}
+comparar_mse <- function(mse_hw, mse_arima, mse_b) {
+  valores <- c(HoltWinters = mse_hw,
+               ARIMA       = mse_arima,
+               Bayesiano   = mse_b)
+  
+  menor <- which.min(valores)
+  list(
+    modelo_ganador = names(valores)[menor],
+    mse_minimo     = valores[menor],
+    todos_los_mse  = valores
+  )
+}
+
+
+resultado <- comparar_mse(mse_hw, mse_arima, mse_bayesian)
+resultado
+cat("Diferencia en el MSE entre el modelo ARIMA y BSTS:", mse_arima - mse_bayesian, "\n")
+```
+Comparemos los pronosticos de los dos mejores modelos, respecto a la serie de tiempo original:
+
+```{r, echo=FALSE}
+
+pronostico_media <- as.numeric(fc_bayesian$mean)
+tiempo_pronostico <- time(manufactura_ts)[(length(manufactura_ts) - length(pronostico_media) + 1):length(manufactura_ts)]
+plot(manufactura_ts, 
+     main = "Serie Original de Empleo vs. Pronóstico BSTS",
+     xlab = "Tiempo",
+     ylab = "Personas Empleadas",
+     col = "darkblue",
+     lwd = 2,
+     type = "l",
+     xlim = range(time(manufactura_ts)),
+     ylim = range(c(manufactura_ts, pronostico_media), na.rm = TRUE))
+
+lines(tiempo_pronostico, pronostico_media, col = "red", lwd = 2)
+
+abline(v = time(manufactura_ts)[length(manufactura_ts) - length(pronostico_media)], 
+       lty = 2, col = "gray40")
+
+# ✅ Leyenda clara
+legend("topleft",
+       legend = c("Serie original", "Pronóstico"),
+       col    = c("darkblue", "red"),
+       lwd    = 2,
+       bty    = "n")  # sin recuadro
+
+grid()
+```
+
+```{r, echo=FALSE}
+
+fc_arima_mean <- fc_arima$mean
+plot(manufactura_ts, 
+     main = "Serie Original de Empleo vs. Pronóstico ARIMA",
+     xlab = "Tiempo",
+     ylab = "Personas Empleadas",
+     col = "darkblue",
+     lwd = 2,
+     type = "l",
+     xlim = range(time(manufactura_ts)),
+     ylim = range(c(manufactura_ts, fc_arima_mean), na.rm = TRUE))
+
+# Pronóstico
+lines(tiempo_pronostico, fc_arima_mean, col = "green", lwd = 2)
+
+# Línea vertical que separa datos observados del pronóstico
+abline(v = time(manufactura_ts)[length(manufactura_ts) - length(fc_arima_mean)], 
+       lty = 2, col = "gray40")
+
+# Leyenda clara (sin recuadro). Mueve "topleft" a "topright" si prefieres.
+legend("topleft",
+       legend = c("Serie original", "Pronóstico ARIMA"),
+       col    = c("darkblue", "green"),
+       lwd    = 2,
+       bty    = "n")   # sin borde
+
+grid()
+
+```
+Visualmente, se percibe un mejor rendimiento del modelo BSTS. Si bien ambas implementaciones ofrecen pronósticos robustos, la aproximación bayesiana demostró un rendimiento considerablemente superior.
+
+## 3.4 Pronostico 2026
+
+Como se observó en el apartado anterior, el modelo con mejor rendimiento fue indudablemente el modelo BSTS, con un desempeño superior en un orden de magnitud respecto a los demás modelos. Por lo tanto, se utilizó esta implementación para la serie de tiempo original y se pronosticó la empleabilidad en la industria manufacturera para el año 2026.
+
+```{r}
+ss <- list()
+ss <- AddLocalLinearTrend(ss, manufactura_ts) 
+ss <- AddSeasonal(ss, manufactura_ts, nseasons = 12) 
+
+set.seed(123)
+fit <- bsts(manufactura_ts, state.specification = ss, niter = 10000, ping = 0)
+
+fc_2026 <- predict(fit, horizon = 12, burn = 1000)
+
+```
+
+```{r}
+plot(fc_2026, main="Pronostico de emleabilidad Industria Manufacturera 2026 BSTS", ylab="Personas empleadas")
+```
+
+
+## 4. Conclusiones
+
+
+El análisis del empleo en México representa un desafío complejo y multifactorial, especialmente por las dificultades inherentes a la recolección y estructuración de datos a gran escala. Desde una perspectiva general, acceder a fuentes confiables y actualizadas puede ser limitado; sin embargo, el uso de técnicas de web scraping y consumo de APIs demostró ser altamente efectivo para la obtención de información temporal relevante. Este tipo de datos aporta una visión dinámica de la realidad económica y se consolida como un recurso de gran valor competitivo para las organizaciones que buscan fundamentar sus decisiones en evidencia empírica.
+
+De acuerdo con la evaluación de los resultados, el modelo Bayesian Structural Time Series (BSTS) mostró el mejor desempeño predictivo dentro del periodo de prueba, superando al modelo ARIMA. Su fortaleza radica en la flexibilidad del enfoque bayesiano y en la capacidad de su estructura de espacio de estados para modelar de manera dinámica los componentes de tendencia y estacionalidad. A diferencia de los modelos de coeficientes constantes, BSTS permitió adaptarse a los cambios no lineales y la alta volatilidad del empleo manufacturero en México durante el periodo 2007–2025, ofreciendo pronósticos más estables y precisos.
+
+Los resultados obtenidos constituyen una ventaja estratégica para las empresas de reclutamiento, al permitirles anticipar picos de demanda laboral, optimizar sus procesos de captación y acercarse proactivamente a clientes del sector manufacturero antes de las temporadas de alta contratación. Esta capacidad predictiva mejora la eficiencia operativa, potencia las estrategias de CRM y eleva la probabilidad de éxito comercial, posicionando a la firma como un socio clave para la gestión de talento especializado. Además, el proceso desarrollado es replicable y escalable, pudiendo aplicarse a otros sectores o geografías mediante la incorporación de indicadores macroeconómicos y laborales. Esto abre una oportunidad significativa para desarrollar soluciones analíticas de alto impacto económico y de gran potencial de crecimiento empresarial.
+
+
+
+## 5 Referencias
+
+
+Agencia de Reclutamiento. (2025). ¿Cuáles son los costos de agencia de reclutamiento en 2025? Recuperado de https://agenciadereclutamiento.com.mx/cuales-son-los-costos-de-agencia-de-reclutamiento-en-2025/
+
+Banco Mundial. (2024). Manufacturing, value added (% of GDP) – Mexico. Recuperado de https://data.worldbank.org/indicator/NV.IND.MANF.ZS?locations=MX
+
+Del Moral, S. (2025). ¿Cuánto cobra un headhunter o agencia de reclutamiento y selección? Recuperado de https://sergiodelmoral.com/cuanto-cobra-headhunter-agencia-reclutamiento-seleccion/
+
+Instituto Nacional de Estadística y Geografía (INEGI). (2024). Producto Interno Bruto y estadísticas del sector manufacturero 2023. Recuperado de https://www.inegi.org.mx
+
+Scott, S. L., & Varian, H. R. (2014). Predicting the present with Bayesian structural time series. International Journal of Mathematical Modelling and Numerical Optimisation, 5(1–2), 4–23. https://doi.org/10.1504/IJMMNO.2014.059942
+
+Winters, P. R. (1960). Forecasting sales by exponentially weighted moving averages. Management Science, 6(3), 324–342. https://doi.org/10.1287/mnsc.6.3.324
+
+Box, G. E. P., & Jenkins, G. M. (1970). Time Series Analysis: Forecasting and Control. San Francisco, CA: Holden-Day.
+
+
